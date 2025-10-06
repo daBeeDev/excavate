@@ -1,4 +1,4 @@
--- === Mining Turtle Excavator (Fixed & Improved) ===
+-- === Mining Turtle Excavator (Final Fixed & Improved) ===
 
 -- File paths
 local STATE_FILE = "resume.dat"
@@ -15,11 +15,20 @@ local dir = 0 -- 0=+Z, 1=+X, 2=-Z, 3=-X
 local totalBlocks = 0
 local blocksDug = 0
 
+-- Torch placement tracking
+local blocksSinceTorch = 0
+local TORCH_INTERVAL = 10
+
 -- === Utility ===
 
 local function saveState()
     local file = fs.open(STATE_FILE, "w")
-    file.write(textutils.serialize({pos = pos, dir = dir, blocksDug = blocksDug}))
+    file.write(textutils.serialize({
+        pos = pos,
+        dir = dir,
+        blocksDug = blocksDug,
+        blocksSinceTorch = blocksSinceTorch
+    }))
     file.close()
 end
 
@@ -31,6 +40,7 @@ local function loadState()
         pos = data.pos
         dir = data.dir
         blocksDug = data.blocksDug or 0
+        blocksSinceTorch = data.blocksSinceTorch or 0
         return true
     end
     return false
@@ -85,7 +95,7 @@ local function checkFuel()
     if turtle.getFuelLevel() < 50 then
         for i = 1, 16 do
             turtle.select(i)
-            if turtle.refuel() then
+            if turtle.refuel(1) then
                 break
             end
         end
@@ -111,7 +121,7 @@ local function forward()
     checkFuel()
     while not turtle.forward() do
         turtle.dig()
-        sleep(0.5)
+        sleep(0.3)
     end
     if dir == 0 then pos.z = pos.z + 1
     elseif dir == 1 then pos.x = pos.x + 1
@@ -124,7 +134,7 @@ local function up()
     checkFuel()
     while not turtle.up() do
         turtle.digUp()
-        sleep(0.5)
+        sleep(0.3)
     end
     pos.y = pos.y + 1
     saveState()
@@ -134,7 +144,7 @@ local function down()
     checkFuel()
     while not turtle.down() do
         turtle.digDown()
-        sleep(0.5)
+        sleep(0.3)
     end
     pos.y = pos.y - 1
     saveState()
@@ -147,6 +157,26 @@ local function isInventoryFull()
         if turtle.getItemCount(i) == 0 then return false end
     end
     return true
+end
+
+local function findItem(name)
+    for i = 1, 16 do
+        local item = turtle.getItemDetail(i)
+        if item and item.name == name then
+            return i
+        end
+    end
+    return nil
+end
+
+local function placeLadderBelowChest()
+    local slot = findItem("minecraft:ladder")
+    if not slot then return end
+    turtle.select(slot)
+    turtle.down()
+    turtle.placeUp()
+    turtle.up()
+    turtle.select(1)
 end
 
 local function unloadInventory()
@@ -163,19 +193,29 @@ local function unloadInventory()
     while pos.x > 0 do forward() end
     while dir ~= 2 do turnRight() end
 
-    -- Drop all items except up to 64 coal
-    local coalKept = 0
+    -- Place ladder below chest
+    placeLadderBelowChest()
+
+    -- Drop all items except ladders, coal, torches (keep up to 64 each)
+    local keep = {["minecraft:coal"] = 64, ["minecraft:ladder"] = 64, ["minecraft:torch"] = 64}
+    local kept = {["minecraft:coal"] = 0, ["minecraft:ladder"] = 0, ["minecraft:torch"] = 0}
+
     for i = 1, 16 do
         turtle.select(i)
         local item = turtle.getItemDetail()
         if item then
-            if item.name == "minecraft:coal" then
-                if coalKept + item.count <= 64 then
-                    coalKept = coalKept + item.count
+            local name = item.name
+            if keep[name] then
+                local allowed = keep[name] - kept[name]
+                if allowed > 0 then
+                    if item.count > allowed then
+                        turtle.drop(item.count - allowed)
+                        kept[name] = kept[name] + allowed
+                    else
+                        kept[name] = kept[name] + item.count
+                    end
                 else
-                    local dropCount = (coalKept + item.count) - 64
-                    turtle.drop(dropCount)
-                    coalKept = 64
+                    turtle.drop()
                 end
             else
                 turtle.drop()
@@ -195,7 +235,7 @@ local function unloadInventory()
     print("Resumed position.")
 end
 
--- === Ore Mining on Perimeter ===
+-- === Ore Detection ===
 
 local function isOre(name)
     return name and (name:match("ore") or name:match("crystal") or name:match("gem"))
@@ -203,78 +243,73 @@ end
 
 local function mineAdjacentOres()
     local directions = {
-        {cond = pos.x == 0, turn = function() while dir ~= 3 do turnRight() end end},
-        {cond = pos.x == WIDTH - 1, turn = function() while dir ~= 1 do turnRight() end end},
-        {cond = pos.z == 0, turn = function() while dir ~= 2 do turnRight() end end},
-        {cond = pos.z == DEPTH - 1, turn = function() while dir ~= 0 do turnRight() end end}
+        function() turnLeft() end,
+        function() turnRight() end,
+        function() turnLeft(); turnLeft() end
     }
-
-    for _, side in ipairs(directions) do
-        if side.cond then
-            local originalDir = dir
-            side.turn()
-            local success, data = turtle.inspect()
-            if success and isOre(data.name) then
-                turtle.dig()
-                forward()
-                mineAdjacentOres()
-                turnLeft() turnLeft()
-                forward()
-                while dir ~= originalDir do turnRight() end
-                saveState()
-            else
-                while dir ~= originalDir do turnRight() end
-            end
+    for _, turn in ipairs(directions) do
+        turn()
+        local success, data = turtle.inspect()
+        if success and isOre(data.name) then
+            turtle.dig()
+            forward()
+            mineAdjacentOres()
+            turnLeft(); turnLeft()
+            forward()
+            turnLeft(); turnLeft()
         end
     end
 end
 
--- === Excavation Logic (Fixed Y direction) ===
+-- === Torch Placement ===
+
+local function placeTorchOnWall()
+    local slot = findItem("minecraft:torch")
+    if not slot then return end
+    turtle.select(slot)
+    turnRight()
+    turtle.place()
+    turnLeft()
+    turtle.select(1)
+end
+
+-- === Excavation Logic (with Resume Support) ===
 
 local function excavate()
-    for h = 0, HEIGHT - 1 do
-        -- Move down one layer each loop
+    local startLayer = math.floor(math.abs(pos.y))
+    local startDepth = pos.z
+    local startX = pos.x
+
+    for h = startLayer, HEIGHT - 1 do
         while pos.y > -h do down() end
         while pos.y < -h do up() end
 
-        for d = 0, DEPTH - 1 do
+        local depthStart = (h == startLayer) and startDepth or 0
+        for d = depthStart, DEPTH - 1 do
             local rowDir = (d % 2 == 0) and 1 or -1
-            local startX = (rowDir == 1) and 0 or WIDTH - 1
+            local rowStartX = (h == startLayer and d == startDepth) and startX or ((rowDir == 1) and 0 or WIDTH - 1)
             local endX = (rowDir == 1) and WIDTH - 1 or 0
             local step = rowDir
 
-            for x = startX, endX, step do
-                -- Move to X
-                if pos.x ~= x then
-                    if pos.x < x then
-                        while dir ~= 1 do turnRight() end
-                    else
-                        while dir ~= 3 do turnRight() end
-                    end
-                    while pos.x ~= x do forward() end
-                end
-
-                -- Move to Z
-                if pos.z ~= d then
-                    if pos.z < d then
-                        while dir ~= 0 do turnRight() end
-                    else
-                        while dir ~= 2 do turnRight() end
-                    end
-                    while pos.z ~= d do forward() end
-                end
-
-                -- Dig down and check perimeter
+            for x = rowStartX, endX, step do
                 turtle.digDown()
                 blocksDug = blocksDug + 1
+                blocksSinceTorch = blocksSinceTorch + 1
                 updateProgressBar()
                 mineAdjacentOres()
+
+                if blocksSinceTorch >= TORCH_INTERVAL then
+                    placeTorchOnWall()
+                    blocksSinceTorch = 0
+                end
 
                 if isInventoryFull() then
                     unloadInventory()
                 end
 
                 saveState()
+
+                if x ~= endX then forward() end
             end
         end
     end
@@ -307,6 +342,7 @@ if fs.exists(STATE_FILE) then
         dir = 0
         totalBlocks = WIDTH * HEIGHT * DEPTH
         blocksDug = 0
+        blocksSinceTorch = 0
         saveState()
         updateProgressBar()
     end
@@ -316,6 +352,7 @@ else
     dir = 0
     totalBlocks = WIDTH * HEIGHT * DEPTH
     blocksDug = 0
+    blocksSinceTorch = 0
     saveState()
     updateProgressBar()
 end
