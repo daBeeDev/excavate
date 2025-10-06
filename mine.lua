@@ -1,4 +1,4 @@
--- === Mining Turtle Excavator (Layered + Resume Fixed) ===
+-- === Mining Turtle Excavator (With GPS) ===
 
 local STATE_FILE = "resume.dat"
 local CONFIG_FILE = "config.dat"
@@ -8,6 +8,7 @@ local pos = {x = 0, y = 0, z = 0}
 local dir = 0 -- 0=+Z, 1=+X, 2=-Z, 3=-X
 local totalBlocks, blocksDug, blocksSinceTorch = 0, 0, 0
 local TORCH_INTERVAL = 10
+local GPS_AVAILABLE = false
 
 -- === Utility ===
 local function saveState()
@@ -41,7 +42,7 @@ local function promptDimensions()
     write("Depth  (Z): ") DEPTH = tonumber(read())
     write("Height (Downward, Y): ") HEIGHT = tonumber(read())
     local file = fs.open(CONFIG_FILE, "w")
-    file.write(textutils.serialize({width = WIDTH, height = HEIGHT, depth = DEPTH}))
+    file.write(textutils.serialize({width = WIDTH, depth = DEPTH, height = HEIGHT}))
     file.close()
 end
 
@@ -50,7 +51,7 @@ local function loadConfig()
     local file = fs.open(CONFIG_FILE, "r")
     local data = textutils.unserialize(file.readAll())
     file.close()
-    WIDTH, HEIGHT, DEPTH = data.width, data.height, data.depth
+    WIDTH, DEPTH, HEIGHT = data.width, data.depth, data.height
 end
 
 local function updateProgressBar()
@@ -70,6 +71,31 @@ local function checkFuel()
     end
 end
 
+-- === GPS Support ===
+local function initModem()
+    if peripheral.isPresent("left") and peripheral.getType("left") == "modem" then
+        peripheral.call("left", "open", 0)
+        return true
+    elseif peripheral.isPresent("right") and peripheral.getType("right") == "modem" then
+        peripheral.call("right", "open", 0)
+        return true
+    end
+    return false
+end
+
+GPS_AVAILABLE = initModem()
+
+local function updatePositionGPS()
+    if not GPS_AVAILABLE then return false end
+    local x, y, z = gps.locate(5)
+    if x and y and z then
+        pos.x, pos.y, pos.z = x, y, z
+        saveState()
+        return true
+    end
+    return false
+end
+
 -- === Movement ===
 local function turnRight() turtle.turnRight() dir = (dir + 1) % 4 saveState() end
 local function turnLeft()  turtle.turnLeft()  dir = (dir - 1) % 4 if dir < 0 then dir = 3 end saveState() end
@@ -82,6 +108,15 @@ local function forward()
     elseif dir == 2 then pos.z = pos.z - 1
     elseif dir == 3 then pos.x = pos.x - 1 end
     saveState()
+    updatePositionGPS()
+end
+
+local function up()
+    checkFuel()
+    while not turtle.up() do turtle.digUp() sleep(0.2) end
+    pos.y = pos.y + 1
+    saveState()
+    updatePositionGPS()
 end
 
 local function down()
@@ -89,9 +124,10 @@ local function down()
     while not turtle.down() do turtle.digDown() sleep(0.2) end
     pos.y = pos.y - 1
     saveState()
+    updatePositionGPS()
 end
 
--- === Inventory ===
+-- === Inventory & Helpers ===
 local function isInventoryFull()
     for i = 1, 16 do if turtle.getItemCount(i) == 0 then return false end end
     return true
@@ -119,7 +155,6 @@ local function unloadInventory()
     local savedPos = {x = pos.x, y = pos.y, z = pos.z}
     local savedDir = dir
 
-    -- Return to 0,0,0
     while pos.y > 0 do down() end
     while dir ~= 2 do turnRight() end
     while pos.z > 0 do forward() end
@@ -131,6 +166,7 @@ local function unloadInventory()
 
     local keep = {["minecraft:coal"] = 64, ["minecraft:ladder"] = 64, ["minecraft:torch"] = 64}
     local kept = {["minecraft:coal"] = 0, ["minecraft:ladder"] = 0, ["minecraft:torch"] = 0}
+
     for i = 1, 16 do
         turtle.select(i)
         local item = turtle.getItemDetail()
@@ -146,12 +182,11 @@ local function unloadInventory()
         end
     end
 
-    -- Return to saved position
     while dir ~= 1 do turnRight() end
     while pos.x < savedPos.x do forward() end
     while dir ~= 0 do turnRight() end
     while pos.z < savedPos.z do forward() end
-    while pos.y < savedPos.y do turtle.up() pos.y = pos.y + 1 saveState() end
+    while pos.y < savedPos.y do up() end
     while dir ~= savedDir do turnRight() end
     print("Resumed position.")
 end
@@ -167,12 +202,10 @@ local function placeTorchOnWall()
     turtle.select(1)
 end
 
--- === Excavation ===
+-- === Excavation Logic ===
 local function excavate()
     local startLayer = math.floor(math.abs(pos.y))
     for layer = startLayer, HEIGHT - 1 do
-        print("Mining layer " .. (layer + 1) .. "/" .. HEIGHT)
-
         for d = 0, DEPTH - 1 do
             local rowDir = (d % 2 == 0) and 1 or -1
             local startX = (rowDir == 1) and 0 or WIDTH - 1
@@ -192,19 +225,19 @@ local function excavate()
 
                 if isInventoryFull() then unloadInventory() end
                 saveState()
+
                 if x ~= endX then forward() end
             end
 
-            -- Move to next row (Z)
+            -- Move to next row
             if d ~= DEPTH - 1 then
                 if rowDir == 1 then turnRight(); forward(); turnRight()
                 else turnLeft(); forward(); turnLeft() end
             end
         end
 
-        -- Finished layer, move down
+        -- Descend to next layer
         if layer ~= HEIGHT - 1 then
-            print("Descending to next layer...")
             turnRight(); turnRight()
             for z = 1, DEPTH - 1 do forward() end
             turnRight(); turnRight()
@@ -219,7 +252,7 @@ end
 -- === Main ===
 term.clear()
 term.setCursorPos(1, 1)
-print("=== Mining Turtle Excavator ===")
+print("=== Mining Turtle Excavator with GPS ===")
 
 if fs.exists(STATE_FILE) then
     print("Previous session found.")
