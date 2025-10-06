@@ -205,6 +205,7 @@ end
 -- === Excavation Logic ===
 local function excavate()
     local startLayer = math.floor(math.abs(pos.y))
+
     for layer = startLayer, HEIGHT - 1 do
         for d = 0, DEPTH - 1 do
             local rowDir = (d % 2 == 0) and 1 or -1
@@ -213,19 +214,25 @@ local function excavate()
             local step = rowDir
 
             for x = startX, endX, step do
+                -- Wait until there is inventory space
+                while isInventoryFull() do
+                    unloadInventory()
+                end
+
+                -- Dig down and update progress
                 turtle.digDown()
                 blocksDug = blocksDug + 1
                 blocksSinceTorch = blocksSinceTorch + 1
                 updateProgressBar()
+                saveState()
 
+                -- Place torch if needed
                 if blocksSinceTorch >= TORCH_INTERVAL then
                     placeTorchOnWall()
                     blocksSinceTorch = 0
                 end
 
-                if isInventoryFull() then unloadInventory() end
-                saveState()
-
+                -- Move forward if not at the end of row
                 if x ~= endX then forward() end
             end
 
@@ -235,6 +242,20 @@ local function excavate()
                 else turnLeft(); forward(); turnLeft() end
             end
         end
+
+        -- Descend to next layer if needed
+        if layer ~= HEIGHT - 1 then
+            turnRight(); turnRight()
+            for z = 1, DEPTH - 1 do forward() end
+            turnRight(); turnRight()
+            down()
+        end
+    end
+
+    print("\nExcavation complete!")
+    fs.delete(STATE_FILE)
+end
+
 
         -- Descend to next layer
         if layer ~= HEIGHT - 1 then
