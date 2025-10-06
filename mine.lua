@@ -1,26 +1,15 @@
--- === Mining Turtle Excavator (Final Fixed & Improved) ===
+-- === Mining Turtle Excavator (Layered + Resume Fixed) ===
 
--- File paths
 local STATE_FILE = "resume.dat"
 local CONFIG_FILE = "config.dat"
 
--- Default dimensions
 local WIDTH, HEIGHT, DEPTH = 5, 3, 10
-
--- Position state
 local pos = {x = 0, y = 0, z = 0}
 local dir = 0 -- 0=+Z, 1=+X, 2=-Z, 3=-X
-
--- Progress tracking
-local totalBlocks = 0
-local blocksDug = 0
-
--- Torch placement tracking
-local blocksSinceTorch = 0
+local totalBlocks, blocksDug, blocksSinceTorch = 0, 0, 0
 local TORCH_INTERVAL = 10
 
 -- === Utility ===
-
 local function saveState()
     local file = fs.open(STATE_FILE, "w")
     file.write(textutils.serialize({
@@ -33,61 +22,42 @@ local function saveState()
 end
 
 local function loadState()
-    if fs.exists(STATE_FILE) then
-        local file = fs.open(STATE_FILE, "r")
-        local data = textutils.unserialize(file.readAll())
-        file.close()
-        pos = data.pos
-        dir = data.dir
-        blocksDug = data.blocksDug or 0
-        blocksSinceTorch = data.blocksSinceTorch or 0
-        return true
-    end
-    return false
+    if not fs.exists(STATE_FILE) then return false end
+    local file = fs.open(STATE_FILE, "r")
+    local data = textutils.unserialize(file.readAll())
+    file.close()
+    pos = data.pos or pos
+    dir = data.dir or 0
+    blocksDug = data.blocksDug or 0
+    blocksSinceTorch = data.blocksSinceTorch or 0
+    return true
 end
 
 local function promptDimensions()
     term.clear()
     term.setCursorPos(1, 1)
     print("=== New Excavation Setup ===")
-
-    write("Width  (X): ")
-    WIDTH = tonumber(read())
-
-    write("Depth  (Z): ")
-    DEPTH = tonumber(read())
-
-    write("Height (Downward, Y): ")
-    HEIGHT = tonumber(read())
-
-    local config = {width = WIDTH, height = HEIGHT, depth = DEPTH}
+    write("Width  (X): ") WIDTH = tonumber(read())
+    write("Depth  (Z): ") DEPTH = tonumber(read())
+    write("Height (Downward, Y): ") HEIGHT = tonumber(read())
     local file = fs.open(CONFIG_FILE, "w")
-    file.write(textutils.serialize(config))
+    file.write(textutils.serialize({width = WIDTH, height = HEIGHT, depth = DEPTH}))
     file.close()
 end
 
 local function loadConfig()
-    if not fs.exists(CONFIG_FILE) then
-        promptDimensions()
-        return
-    end
+    if not fs.exists(CONFIG_FILE) then promptDimensions() return end
     local file = fs.open(CONFIG_FILE, "r")
     local data = textutils.unserialize(file.readAll())
     file.close()
-    WIDTH = data.width
-    HEIGHT = data.height
-    DEPTH = data.depth
+    WIDTH, HEIGHT, DEPTH = data.width, data.height, data.depth
 end
 
 local function updateProgressBar()
-    local barLength = 20
     local percent = math.floor((blocksDug / totalBlocks) * 100)
-    local filled = math.floor((percent / 100) * barLength)
+    local filled = math.floor(percent / 5)
     term.setCursorPos(1, 5)
-    term.write("Progress: [")
-    term.write(string.rep("#", filled))
-    term.write(string.rep("-", barLength - filled))
-    term.write("] " .. percent .. "%")
+    term.write(("Progress: [%s%s] %d%%"):format(string.rep("#", filled), string.rep("-", 20 - filled), percent))
 end
 
 local function checkFuel()
@@ -95,34 +65,18 @@ local function checkFuel()
     if turtle.getFuelLevel() < 50 then
         for i = 1, 16 do
             turtle.select(i)
-            if turtle.refuel(1) then
-                break
-            end
+            if turtle.refuel(1) then break end
         end
     end
 end
 
 -- === Movement ===
-
-local function turnRight()
-    turtle.turnRight()
-    dir = (dir + 1) % 4
-    saveState()
-end
-
-local function turnLeft()
-    turtle.turnLeft()
-    dir = (dir - 1) % 4
-    if dir < 0 then dir = 3 end
-    saveState()
-end
+local function turnRight() turtle.turnRight() dir = (dir + 1) % 4 saveState() end
+local function turnLeft()  turtle.turnLeft()  dir = (dir - 1) % 4 if dir < 0 then dir = 3 end saveState() end
 
 local function forward()
     checkFuel()
-    while not turtle.forward() do
-        turtle.dig()
-        sleep(0.3)
-    end
+    while not turtle.forward() do turtle.dig() sleep(0.2) end
     if dir == 0 then pos.z = pos.z + 1
     elseif dir == 1 then pos.x = pos.x + 1
     elseif dir == 2 then pos.z = pos.z - 1
@@ -130,41 +84,23 @@ local function forward()
     saveState()
 end
 
-local function up()
-    checkFuel()
-    while not turtle.up() do
-        turtle.digUp()
-        sleep(0.3)
-    end
-    pos.y = pos.y + 1
-    saveState()
-end
-
 local function down()
     checkFuel()
-    while not turtle.down() do
-        turtle.digDown()
-        sleep(0.3)
-    end
+    while not turtle.down() do turtle.digDown() sleep(0.2) end
     pos.y = pos.y - 1
     saveState()
 end
 
--- === Inventory & Unload ===
-
+-- === Inventory ===
 local function isInventoryFull()
-    for i = 1, 16 do
-        if turtle.getItemCount(i) == 0 then return false end
-    end
+    for i = 1, 16 do if turtle.getItemCount(i) == 0 then return false end end
     return true
 end
 
 local function findItem(name)
     for i = 1, 16 do
         local item = turtle.getItemDetail(i)
-        if item and item.name == name then
-            return i
-        end
+        if item and item.name == name then return i end
     end
     return nil
 end
@@ -173,19 +109,17 @@ local function placeLadderBelowChest()
     local slot = findItem("minecraft:ladder")
     if not slot then return end
     turtle.select(slot)
-    turtle.down()
-    turtle.placeUp()
-    turtle.up()
+    if turtle.detectDown() then turtle.digDown() end
+    turtle.placeDown()
     turtle.select(1)
 end
 
 local function unloadInventory()
-    print("Inventory full. Returning to unload...")
-
+    print("Returning to chest to unload...")
     local savedPos = {x = pos.x, y = pos.y, z = pos.z}
     local savedDir = dir
 
-    -- Return home (0,0,0)
+    -- Return to 0,0,0
     while pos.y > 0 do down() end
     while dir ~= 2 do turnRight() end
     while pos.z > 0 do forward() end
@@ -193,13 +127,10 @@ local function unloadInventory()
     while pos.x > 0 do forward() end
     while dir ~= 2 do turnRight() end
 
-    -- Place ladder below chest
     placeLadderBelowChest()
 
-    -- Drop all items except ladders, coal, torches (keep up to 64 each)
     local keep = {["minecraft:coal"] = 64, ["minecraft:ladder"] = 64, ["minecraft:torch"] = 64}
     local kept = {["minecraft:coal"] = 0, ["minecraft:ladder"] = 0, ["minecraft:torch"] = 0}
-
     for i = 1, 16 do
         turtle.select(i)
         local item = turtle.getItemDetail()
@@ -207,110 +138,77 @@ local function unloadInventory()
             local name = item.name
             if keep[name] then
                 local allowed = keep[name] - kept[name]
-                if allowed > 0 then
-                    if item.count > allowed then
-                        turtle.drop(item.count - allowed)
-                        kept[name] = kept[name] + allowed
-                    else
-                        kept[name] = kept[name] + item.count
-                    end
-                else
-                    turtle.drop()
-                end
+                if allowed < item.count then turtle.drop(item.count - allowed) end
+                kept[name] = math.min(keep[name], kept[name] + item.count)
             else
                 turtle.drop()
             end
         end
     end
-    turtle.select(1)
 
     -- Return to saved position
     while dir ~= 1 do turnRight() end
     while pos.x < savedPos.x do forward() end
     while dir ~= 0 do turnRight() end
     while pos.z < savedPos.z do forward() end
-    while pos.y < savedPos.y do up() end
+    while pos.y < savedPos.y do turtle.up() pos.y = pos.y + 1 saveState() end
     while dir ~= savedDir do turnRight() end
-
     print("Resumed position.")
 end
 
--- === Ore Detection ===
-
-local function isOre(name)
-    return name and (name:match("ore") or name:match("crystal") or name:match("gem"))
-end
-
-local function mineAdjacentOres()
-    local directions = {
-        function() turnLeft() end,
-        function() turnRight() end,
-        function() turnLeft(); turnLeft() end
-    }
-    for _, turn in ipairs(directions) do
-        turn()
-        local success, data = turtle.inspect()
-        if success and isOre(data.name) then
-            turtle.dig()
-            forward()
-            mineAdjacentOres()
-            turnLeft(); turnLeft()
-            forward()
-            turnLeft(); turnLeft()
-        end
-    end
-end
-
 -- === Torch Placement ===
-
 local function placeTorchOnWall()
     local slot = findItem("minecraft:torch")
     if not slot then return end
     turtle.select(slot)
     turnRight()
-    turtle.place()
+    if not turtle.detect() then turtle.place() end
     turnLeft()
     turtle.select(1)
 end
 
--- === Excavation Logic (with Resume Support) ===
-
+-- === Excavation ===
 local function excavate()
     local startLayer = math.floor(math.abs(pos.y))
-    local startDepth = pos.z
-    local startX = pos.x
+    for layer = startLayer, HEIGHT - 1 do
+        print("Mining layer " .. (layer + 1) .. "/" .. HEIGHT)
 
-    for h = startLayer, HEIGHT - 1 do
-        while pos.y > -h do down() end
-        while pos.y < -h do up() end
-
-        local depthStart = (h == startLayer) and startDepth or 0
-        for d = depthStart, DEPTH - 1 do
+        for d = 0, DEPTH - 1 do
             local rowDir = (d % 2 == 0) and 1 or -1
-            local rowStartX = (h == startLayer and d == startDepth) and startX or ((rowDir == 1) and 0 or WIDTH - 1)
+            local startX = (rowDir == 1) and 0 or WIDTH - 1
             local endX = (rowDir == 1) and WIDTH - 1 or 0
             local step = rowDir
 
-            for x = rowStartX, endX, step do
+            for x = startX, endX, step do
                 turtle.digDown()
                 blocksDug = blocksDug + 1
                 blocksSinceTorch = blocksSinceTorch + 1
                 updateProgressBar()
-                mineAdjacentOres()
 
                 if blocksSinceTorch >= TORCH_INTERVAL then
                     placeTorchOnWall()
                     blocksSinceTorch = 0
                 end
 
-                if isInventoryFull() then
-                    unloadInventory()
-                end
-
+                if isInventoryFull() then unloadInventory() end
                 saveState()
-
                 if x ~= endX then forward() end
             end
+
+            -- Move to next row (Z)
+            if d ~= DEPTH - 1 then
+                if rowDir == 1 then turnRight(); forward(); turnRight()
+                else turnLeft(); forward(); turnLeft() end
+            end
+        end
+
+        -- Finished layer, move down
+        if layer ~= HEIGHT - 1 then
+            print("Descending to next layer...")
+            turnRight(); turnRight()
+            for z = 1, DEPTH - 1 do forward() end
+            turnRight(); turnRight()
+            down()
         end
     end
 
@@ -319,43 +217,26 @@ local function excavate()
 end
 
 -- === Main ===
-
 term.clear()
-term.setCursorPos(1,1)
+term.setCursorPos(1, 1)
 print("=== Mining Turtle Excavator ===")
 
 if fs.exists(STATE_FILE) then
     print("Previous session found.")
     write("Continue from saved position? (Y/N): ")
-    local choice = read():lower()
-
-    if choice == "y" then
+    if read():lower() == "y" then
         loadState()
         loadConfig()
-        totalBlocks = WIDTH * HEIGHT * DEPTH
-        updateProgressBar()
     else
         fs.delete(STATE_FILE)
-        fs.delete(CONFIG_FILE)
         promptDimensions()
-        pos = {x = 0, y = 0, z = 0}
-        dir = 0
-        totalBlocks = WIDTH * HEIGHT * DEPTH
-        blocksDug = 0
-        blocksSinceTorch = 0
-        saveState()
-        updateProgressBar()
     end
 else
     promptDimensions()
-    pos = {x = 0, y = 0, z = 0}
-    dir = 0
-    totalBlocks = WIDTH * HEIGHT * DEPTH
-    blocksDug = 0
-    blocksSinceTorch = 0
-    saveState()
-    updateProgressBar()
 end
 
+loadConfig()
+totalBlocks = WIDTH * HEIGHT * DEPTH
+updateProgressBar()
 sleep(1)
 excavate()
