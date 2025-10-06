@@ -1,3 +1,5 @@
+-- === Mining Turtle Excavator (Fixed & Improved) ===
+
 -- File paths
 local STATE_FILE = "resume.dat"
 local CONFIG_FILE = "config.dat"
@@ -17,7 +19,7 @@ local blocksDug = 0
 
 local function saveState()
     local file = fs.open(STATE_FILE, "w")
-    file.write(textutils.serialize({pos = pos, dir = dir}))
+    file.write(textutils.serialize({pos = pos, dir = dir, blocksDug = blocksDug}))
     file.close()
 end
 
@@ -28,6 +30,7 @@ local function loadState()
         file.close()
         pos = data.pos
         dir = data.dir
+        blocksDug = data.blocksDug or 0
         return true
     end
     return false
@@ -37,9 +40,15 @@ local function promptDimensions()
     term.clear()
     term.setCursorPos(1, 1)
     print("=== New Excavation Setup ===")
-    write("Width  (X): ") WIDTH = tonumber(read())
-    write("Height (Y): ") HEIGHT = tonumber(read())
-    write("Depth  (Z): ") DEPTH = tonumber(read())
+
+    write("Width  (X): ")
+    WIDTH = tonumber(read())
+
+    write("Depth  (Z): ")
+    DEPTH = tonumber(read())
+
+    write("Height (Downward, Y): ")
+    HEIGHT = tonumber(read())
 
     local config = {width = WIDTH, height = HEIGHT, depth = DEPTH}
     local file = fs.open(CONFIG_FILE, "w")
@@ -76,7 +85,7 @@ local function checkFuel()
     if turtle.getFuelLevel() < 50 then
         for i = 1, 16 do
             turtle.select(i)
-            if turtle.refuel(1) then
+            if turtle.refuel() then
                 break
             end
         end
@@ -94,6 +103,7 @@ end
 local function turnLeft()
     turtle.turnLeft()
     dir = (dir - 1) % 4
+    if dir < 0 then dir = 3 end
     saveState()
 end
 
@@ -140,12 +150,12 @@ local function isInventoryFull()
 end
 
 local function unloadInventory()
-    print("Inventory full. Unloading...")
+    print("Inventory full. Returning to unload...")
 
     local savedPos = {x = pos.x, y = pos.y, z = pos.z}
     local savedDir = dir
 
-    -- Go home
+    -- Return home (0,0,0)
     while pos.y > 0 do down() end
     while dir ~= 2 do turnRight() end
     while pos.z > 0 do forward() end
@@ -153,7 +163,7 @@ local function unloadInventory()
     while pos.x > 0 do forward() end
     while dir ~= 2 do turnRight() end
 
-    -- Drop items except coal (keep 64)
+    -- Drop all items except up to 64 coal
     local coalKept = 0
     for i = 1, 16 do
         turtle.select(i)
@@ -188,7 +198,7 @@ end
 -- === Ore Mining on Perimeter ===
 
 local function isOre(name)
-    return name and string.find(name, "ore")
+    return name and (name:match("ore") or name:match("crystal") or name:match("gem"))
 end
 
 local function mineAdjacentOres()
@@ -219,10 +229,14 @@ local function mineAdjacentOres()
     end
 end
 
--- === Excavation Logic ===
+-- === Excavation Logic (Fixed Y direction) ===
 
 local function excavate()
-    for h = HEIGHT - 1, 0, -1 do
+    for h = 0, HEIGHT - 1 do
+        -- Move down one layer each loop
+        while pos.y > -h do down() end
+        while pos.y < -h do up() end
+
         for d = 0, DEPTH - 1 do
             local rowDir = (d % 2 == 0) and 1 or -1
             local startX = (rowDir == 1) and 0 or WIDTH - 1
@@ -250,10 +264,6 @@ local function excavate()
                     while pos.z ~= d do forward() end
                 end
 
-                -- Move to Y (DOWN instead of UP)
-                while pos.y < h do up() end
-                while pos.y > h do down() end
-
                 -- Dig down and check perimeter
                 turtle.digDown()
                 blocksDug = blocksDug + 1
@@ -273,7 +283,6 @@ local function excavate()
     fs.delete(STATE_FILE)
 end
 
-
 -- === Main ===
 
 term.clear()
@@ -289,7 +298,6 @@ if fs.exists(STATE_FILE) then
         loadState()
         loadConfig()
         totalBlocks = WIDTH * HEIGHT * DEPTH
-        blocksDug = (pos.y * WIDTH * DEPTH) + (pos.z * WIDTH) + pos.x
         updateProgressBar()
     else
         fs.delete(STATE_FILE)
