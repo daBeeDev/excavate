@@ -222,15 +222,15 @@ end
 -- === Excavation Logic ===
 
 local function excavate()
-    for h = pos.y, HEIGHT - 1 do
-        for d = pos.z, DEPTH - 1 do
+    for h = HEIGHT - 1, 0, -1 do
+        for d = 0, DEPTH - 1 do
             local rowDir = (d % 2 == 0) and 1 or -1
             local startX = (rowDir == 1) and 0 or WIDTH - 1
             local endX = (rowDir == 1) and WIDTH - 1 or 0
             local step = rowDir
 
             for x = startX, endX, step do
-                -- Move to correct X
+                -- Move to X
                 if pos.x ~= x then
                     if pos.x < x then
                         while dir ~= 1 do turnRight() end
@@ -240,7 +240,7 @@ local function excavate()
                     while pos.x ~= x do forward() end
                 end
 
-                -- Move to correct Z
+                -- Move to Z
                 if pos.z ~= d then
                     if pos.z < d then
                         while dir ~= 0 do turnRight() end
@@ -250,11 +250,11 @@ local function excavate()
                     while pos.z ~= d do forward() end
                 end
 
-                -- Move to correct Y
+                -- Move to Y (DOWN instead of UP)
                 while pos.y < h do up() end
                 while pos.y > h do down() end
 
-                -- Dig and progress
+                -- Dig down and check perimeter
                 turtle.digDown()
                 blocksDug = blocksDug + 1
                 updateProgressBar()
@@ -267,11 +267,12 @@ local function excavate()
                 saveState()
             end
         end
-        if h < HEIGHT - 1 then up() end
     end
+
     print("\nExcavation complete!")
     fs.delete(STATE_FILE)
 end
+
 
 -- === Main ===
 
